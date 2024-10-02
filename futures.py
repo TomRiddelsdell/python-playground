@@ -1,136 +1,168 @@
-'''
-We want to simulate requesting batches of market data as the requirements arise. 
-A batch should be triggered only we hit the equivalent of a purple child.'
-We should be careful that we can capture all known dependencies at any point in time, including those in the future.
-
-
-A good case is the iSelect case. Here we have a dep on each of the underliers unless their weight is zero.
-We only know the weight on day T
-'''
-import datetime as dt
 import concurrent.futures
+import datetime as dt
+from typing import List
 import pandas as pd
-from random import random
-import ast
-import operator
-import time
-import astpretty
 import matplotlib.pyplot as plt
-
-    
-
-# Function to simulate a long-running task
-def resolve_future_value(x):
-    time.sleep(2)  # Simulate a time-consuming operation
-    return x * 2
+import ast
 
 # Base class for all operation nodes
-class OperationNode(ast.AST):
-    def __init__(self, left, right):
-        self.left = left
-        self.right = right
-
-    # Overload operators for operation nodes
+class OperationNode:
     def __add__(self, other):
-        if isinstance(other, OperationNode):
-            return AdditionNode(self, other)
-        return AdditionNode(self, ValueNode(other))
-
-    def __sub__(self, other):
-        if isinstance(other, OperationNode):
-            return SubtractionNode(self, other)
-        return SubtractionNode(self, ValueNode(other))
-
-    def __mul__(self, other):
-        if isinstance(other, OperationNode):
-            return MultiplicationNode(self, other)
-        return MultiplicationNode(self, ValueNode(other))
-
-    def __truediv__(self, other):
-        if isinstance(other, OperationNode):
-            return DivisionNode(self, other)
-        return DivisionNode(self, ValueNode(other))
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return AddNode(self, other)
 
     def __radd__(self, other):
-        return self.__add__(other)
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return AddNode(other, self)
+
+    def __sub__(self, other):
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return SubNode(self, other)
 
     def __rsub__(self, other):
-        return -self.__sub__(other)
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return SubNode(other, self)
+
+    def __mul__(self, other):
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return MulNode(self, other)
 
     def __rmul__(self, other):
-        return self.__mul__(other)
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return MulNode(other, self)
+
+    def __truediv__(self, other):
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return DivNode(self, other)
 
     def __rtruediv__(self, other):
-        return 1 / self.__truediv__(other)
+        if not isinstance(other, OperationNode):
+            other = ValueNode(other)
+        return DivNode(other, self)
 
-# Class to represent an addition node in the AST
-class AdditionNode(OperationNode):
+    def evaluate(self):
+        raise NotImplementedError("Subclasses should implement this!")
+
+class ValueNode(ast.Expr, OperationNode):
+    def __init__(self, value):
+        super().__init__()
+        self.value = value
+
+    def evaluate(self):
+        if isinstance(self.value, concurrent.futures.Future):
+            return self.value.result()
+        return self.value
+
+class AddNode(ast.BinOp, OperationNode):
     def __init__(self, left, right):
-        super().__init__(left, right)
+        super().__init__(left=left, op=ast.Add(), right=right)
 
     def evaluate(self):
         return self.left.evaluate() + self.right.evaluate()
 
-# Class to represent a multiplication node in the AST
-class MultiplicationNode(OperationNode):
+class SubNode(ast.BinOp, OperationNode):
     def __init__(self, left, right):
-        super().__init__(left, right)
-
-    def evaluate(self):
-        return self.left.evaluate() * self.right.evaluate()
-
-# Class to represent a subtraction node in the AST
-class SubtractionNode(OperationNode):
-    def __init__(self, left, right):
-        super().__init__(left, right)
+        super().__init__(left=left, op=ast.Sub(), right=right)
 
     def evaluate(self):
         return self.left.evaluate() - self.right.evaluate()
 
-# Class to represent a division node in the AST
-class DivisionNode(OperationNode):
+class MulNode(ast.BinOp, OperationNode):
     def __init__(self, left, right):
-        super().__init__(left, right)
+        super().__init__(left=left, op=ast.Mult(), right=right)
+
+    def evaluate(self):
+        return self.left.evaluate() * self.right.evaluate()
+
+class DivNode(ast.BinOp, OperationNode):
+    def __init__(self, left, right):
+        super().__init__(left=left, op=ast.Div(), right=right)
 
     def evaluate(self):
         return self.left.evaluate() / self.right.evaluate()
 
-# Class to represent a leaf node that holds a future or a constant value
-class ValueNode(ast.AST):
-    def __init__(self, future_or_value):
-        self.future_or_value = future_or_value
+class MarketDataSpec:
+    def __init__(self, asset: str, date: dt.date):
+        self.asset = asset
+        self.date = date
 
-    def evaluate(self):
-        # If it's a future, resolve it; otherwise, return the value directly
-        if isinstance(self.future_or_value, concurrent.futures.Future):
-            return self.future_or_value.result()  # Block until future is resolved
-        return self.future_or_value
+class MarketDataResolver:
+    def get(self, requests: List[MarketDataSpec]):
+        print(f"Resolving some prices...")
+        return (self._get_price(req.asset, req.date) for req in requests)
 
-    # Overload operators for ValueNode
-    def __add__(self, other):
-        if isinstance(other, ValueNode):
-            return AdditionNode(self, other)
-        return AdditionNode(self, ValueNode(other))
+    def _get_price(self, asset: str, date: dt.date):
+        if asset in ['a', 'c', 'e']:
+            return 100. + (date - dt.date(2019, 1, 1)).days * 0.01
+        if asset in ['b', 'd']:
+            return 100. + (date - dt.date(2019, 1, 1)).days * (-0.005)
 
-    def __sub__(self, other):
-        if isinstance(other, ValueNode):
-            return SubtractionNode(self, other)
-        return SubtractionNode(self, ValueNode(other))
+class MarketDataContext:
+    def __init__(self, batch_size=10):
+        self.executor = None
+        self.price_requests = []
+        self.ast_nodes = []
+        self.batch_size = batch_size
 
-    def __mul__(self, other):
-        if isinstance(other, ValueNode):
-            return MultiplicationNode(self, other)
-        return MultiplicationNode(self, ValueNode(other))
+    def __enter__(self):
+        #self.executor = concurrent.futures.ThreadPoolExecutor()
+        return self
 
-    def __truediv__(self, other):
-        if isinstance(other, ValueNode):
-            return DivisionNode(self, other)
-        return DivisionNode(self, ValueNode(other))
+    def __exit__(self, exc_type, exc_value, traceback):
+        pass #self.executor.shutdown()
 
+    def get_price(self, asset: str, date: dt.date):
+        future = concurrent.futures.Future()
+        value_node = ValueNode(future)
+        self.price_requests.append({"value_node":value_node, "spec":MarketDataSpec(asset, date)})
+        self.ast_nodes.append(value_node)
+        if len(self.price_requests) >= self.batch_size:
+            self.resolve()
+        return value_node
 
-'''though I've written this fn as if all weights are known, I'm using dt to change the return information to simulate 
-new rebalances coming in over time.
-'''
+    def get_return(self, asset: str, date: dt.date):
+        return -1 + (self.get_price(asset, date) / self.get_price(asset, date - dt.timedelta(days=1)))
+
+    def resolve(self):
+
+        resolved_data = MarketDataResolver().get((f["spec"] for f in self.price_requests))
+        for (req, data) in zip(self.price_requests, resolved_data):
+            req["value_node"].value.set_result(data)
+
+        for node in self.ast_nodes:
+            node.evaluate()
+
+        self.price_requests = []:while
+        self.ast_nodes = []
+
+def evaluate_index_value(end_date: dt.date):
+    index_value = ValueNode(100)
+    cur_dt = dt.date(2020, 1, 1)
+    index_level_history = pd.Series(dtype=object)
+    index_level_history[cur_dt] = index_value.evaluate()
+
+    with MarketDataContext(50) as market_data_context:
+        while cur_dt < end_date:
+            print(cur_dt)
+            weights = iselect_weights(cur_dt)
+            returns = [market_data_context.get_return(k, cur_dt) * v for k, v in weights.items()]
+            index_value = index_value * (1. + sum(returns))
+            #index_level_history[cur_dt] = index_value.evaluate()
+            cur_dt += dt.timedelta(days=1)
+
+        market_data_context.resolve()  # Ensure all price requests are resolved
+        final_value = index_value.evaluate()  # This should trigger the computation of all prices
+        index_level_history.plot()
+        plt.show()
+        print(f"final_level={final_value}")
+
 def iselect_weights(date: dt.date):
     if date < dt.date(2020, 1, 1):
         return {}
@@ -141,42 +173,12 @@ def iselect_weights(date: dt.date):
     if date >= dt.date(2021, 1, 1) and date < dt.date(2022, 1, 1):
         return {'a':.25, 'b':.25, 'c':0, 'd':0, 'e':.5}
     
-#simulate 2 asset prices that grown linearly over time
-def get_price(asset: str, date: dt.date):
-    if(asset == 'a' or asset == 'c' or asset == 'e'):
-        return ValueNode(100. + (date - dt.date(2019, 1, 1)).days * 0.01)
-    if(asset == 'b' or asset == 'd'):
-        return ValueNode(100. + (date - dt.date(2019, 1, 1)).days * (-0.005))
-
-def r1(asset, date: dt.date):
-    return -1 + get_price(asset, date) / get_price(asset, date - dt.timedelta(days=1))
-
-def evaluate_index_value(end_date: dt.date):
-    index_value = 100
-    cur_dt = dt.date(2020, 1, 1)
-    index_level_history = pd.Series()#dtype=object)
-    index_level_history[cur_dt] = index_value
-
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-
-        while cur_dt < end_date:
-            weights = iselect_weights(cur_dt)
-            prices = {k: executor.submit(get_price, k, cur_dt) for k in weights.keys()}
-            index_value = index_value * (1 + sum([r1(k, cur_dt) * v for k, v in weights.items()]))
-
-            index_level_history[cur_dt] = index_value.evaluate()
-
-            cur_dt += dt.timedelta(days=1)
-
-        astpretty.pprint(index_value)
-        final_value = index_value.evaluate() # this should trigger the computation of all prices
-        index_level_history.plot()
-        plt.show()
-        #print the index_level_history to see the values of the index at each date after the future have completed
-        print(f"final_level={final_value} and the AST is\n")
-
+# Example usage
 def main():
-    evaluate_index_value(dt.date(2022, 1, 1))
+    try:
+        evaluate_index_value(dt.date(2022, 1, 1))
+    except Exception as e:
+        print(e)
 
 if __name__ == "__main__":
     main()
