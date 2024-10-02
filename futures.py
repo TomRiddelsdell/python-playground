@@ -139,7 +139,7 @@ class MarketDataContext:
         for node in self.ast_nodes:
             node.evaluate()
 
-        self.price_requests = []:while
+        self.price_requests = []
         self.ast_nodes = []
 
 def evaluate_index_value(end_date: dt.date):
